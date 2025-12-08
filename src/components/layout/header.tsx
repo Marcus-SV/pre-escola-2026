@@ -13,8 +13,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 export function Header() {
-    const handleLogout = () => {
-        signOut({ callbackUrl: '/login' });
+    const handleLogout = async () => {
+        await signOut({ callbackUrl: '/login' });
     };
 
     return (
@@ -42,7 +42,10 @@ export function Header() {
                         <DropdownMenuItem>Perfil</DropdownMenuItem>
                         <DropdownMenuItem>Configurações</DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-red-500 cursor-pointer" onClick={handleLogout}>
+                        <DropdownMenuItem
+                            className="text-red-600 font-medium cursor-pointer focus:text-red-600 focus:bg-red-50"
+                            onSelect={() => handleLogout()}
+                        >
                             Sair
                         </DropdownMenuItem>
                     </DropdownMenuContent>
