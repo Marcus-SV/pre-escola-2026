@@ -118,6 +118,26 @@ export default function PendentesPage() {
                             </CardContent>
                         </Card>
 
+                        <Card className="border-l-4 border-l-orange-500">
+                            <CardContent className="pt-6">
+                                <div className="flex items-center justify-between mb-2">
+                                    <Clock className="h-8 w-8 text-orange-500" />
+                                    <span className="text-3xl font-bold">{data.total_padrao || 0}</span>
+                                </div>
+                                <p className="text-sm text-muted-foreground font-medium">Total Padrão (Parcial)</p>
+                            </CardContent>
+                        </Card>
+
+                        <Card className="border-l-4 border-l-cyan-500">
+                            <CardContent className="pt-6">
+                                <div className="flex items-center justify-between mb-2">
+                                    <Clock className="h-8 w-8 text-cyan-500" />
+                                    <span className="text-3xl font-bold">{data.total_integral || 0}</span>
+                                </div>
+                                <p className="text-sm text-muted-foreground font-medium">Total Integral</p>
+                            </CardContent>
+                        </Card>
+
                         <Card className="border-l-4 border-l-purple-500">
                             <CardContent className="pt-6">
                                 <div className="flex items-center justify-between mb-2">

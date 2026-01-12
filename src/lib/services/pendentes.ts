@@ -4,12 +4,17 @@ interface Pendente {
     escola_destino: string;
     idade: string;
     prazo: string;
+    origem: 'PADRAO' | 'INTEGRAL'; // Track source
 }
 
 interface GrupoPendente {
     escola_destino: string;
     idade: string;
     quantidade: number;
+    por_origem: {
+        PADRAO: number;
+        INTEGRAL: number;
+    };
 }
 
 export class PendentesService {
@@ -33,26 +38,37 @@ export class PendentesService {
             ];
 
             const totalPendentes = todosPendentes.length;
+            let totalPadrao = 0;
+            let totalIntegral = 0;
 
             // Group by School and Age
             const agrupadosMap: Record<string, GrupoPendente> = {};
 
             todosPendentes.forEach(p => {
+                if (p.origem === 'PADRAO') totalPadrao++;
+                else if (p.origem === 'INTEGRAL') totalIntegral++;
+
                 const key = `${p.escola_destino}|${p.idade}`;
                 if (!agrupadosMap[key]) {
                     agrupadosMap[key] = {
                         escola_destino: p.escola_destino,
                         idade: p.idade,
-                        quantidade: 0
+                        quantidade: 0,
+                        por_origem: { PADRAO: 0, INTEGRAL: 0 }
                     };
                 }
                 agrupadosMap[key].quantidade++;
+                if (p.origem) {
+                    agrupadosMap[key].por_origem[p.origem]++;
+                }
             });
 
             return {
                 success: true,
                 message: 'Pendentes verificados com sucesso (Padrão + Integral)',
                 total_pendentes: totalPendentes,
+                total_padrao: totalPadrao,
+                total_integral: totalIntegral,
                 agrupados: Object.values(agrupadosMap),
                 data_verificacao: new Date().toLocaleDateString('pt-BR')
             };
@@ -112,7 +128,8 @@ export class PendentesService {
                             pendentes.push({
                                 escola_destino: escolaDestino,
                                 idade: idade,
-                                prazo: prazo
+                                prazo: prazo,
+                                origem: 'PADRAO'
                             });
                         }
                     }
@@ -188,7 +205,8 @@ export class PendentesService {
                             pendentes.push({
                                 escola_destino: escolaDestino,
                                 idade: idade,
-                                prazo: prazo
+                                prazo: prazo,
+                                origem: 'INTEGRAL'
                             });
                         }
                     }
@@ -232,6 +250,8 @@ export class PendentesService {
             return {
                 success: true,
                 total_pendentes: totalPendentes,
+                total_padrao: resultado.total_padrao,
+                total_integral: resultado.total_integral,
                 por_escola: porEscola,
                 por_idade: porIdade,
                 detalhado: agrupados,
