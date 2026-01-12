@@ -98,73 +98,40 @@ export class CompatibilizacaoService {
             pendentes.forEach((p: any) => {
                 const escola = p.escola_destino;
                 const idade = p.idade;
-                const quantidade = p.quantidade;
+                // Access source split, added in PendentesService
+                const porOrigem = p.por_origem || { PADRAO: p.quantidade, INTEGRAL: 0 };
 
-                // Determine Serie based on Age (approximate logic, check requirements if strict)
-                // Age 4 -> Serie 1, Age 5 -> Serie 2
                 let serie = '';
                 if (idade === '4') serie = '1';
                 else if (idade === '5') serie = '2';
 
-                // Determine Turno. 
-                // IMPORTANT: The prompt implies Integral Pending = Integral Vacancies
-                // But the 'Pending' object doesn't strictly have a 'Periodo' field from the sheet read logic,
-                // except it came from 'Integral' sheet or is generalized. 
-                // However, the `pendentes.ts` currently groups by School|Age. 
-                // If the prompt says "subtract these vacancies", we must assume which shift they consume.
-                // Since the request specific "Menu Pendentes considera vagas do periodo integral",
-                // and we are adding them.
-                // Assuming standard pendentes use the same logic as allocation? 
-                // Or should we assume they consume INTEGRAL slots if they come from the Integral sheet?
-                // The current `GrupoPendente` doesn't distinguish source (Integral vs Standard).
-                // But logically, if a child is pending for a school/age, they occupy a spot.
-                // If the user request implies specifically INTEGRAL pending, we might need to know the shift.
-                // BUT, looking at `pendentes.ts`, we only capture `escola_destino` and `idade`.
-                // Let's assume for now they consume from the 'INTEGRAL' pool if available, or we might need to be smarter.
-                // Wait, the prompt says: "Verique se o menu 'Pendentes' considera as vagas do periodo integral que são as excessôes."
-                // "Discriminar os pendentes de cada planilha e somar o resultado das duas"
-                // "No menu 'Compatibilização' é necessário subtrair as vagas deste totas de pendentas das vagas restantes"
-
-                // If we don't know the shift, we can't subtract accurately from Key: Escola|Serie|Turno.
-                // Let's assume the safest bet: The "Integral" sheet implies INTEGRAL shift. 
-                // The "Standard" sheet implies... what?
-                // If we look at `pendentes.ts`, it reads 'PRAZO', 'ESCOLA DESTINO', 'IDADE'. It does NOT read 'TURNO'.
-                // If we simply subtract from matching School/Serie, we have to pick a Turno.
-                // Let's assume 'INTEGRAL' for the new ones.
-                // But we merged them.
-                // Let's check `PendentesService`.
-                // Maybe we should update `PendentesService` to include `origem` or `turno`?
-                // The prompt for Pendentes: "Atualizar para verificar pendentes da planilha integral... Filtrando para escolas de exceção... considera as vagas do periodo integral"
-                // This strongly suggests these ARE integral vacancies.
-                // Standard pendentes? Probably also occupy slots.
-                // Let's iterate and try to subtract from INTEGRAL first, then others?
-                // Or maybe we should improve `pendentes.ts` to flag them.
-
-                // Actually, let's look at `mapeamento` keys again: Escola|Serie|Turno.
-                // If I have 5 pending kids for School X, Age 4. 
-                // They need slots. 
-                // I will try to subtract from INTEGRAL first (as they are likely full-time priority or exception),
-                // then maybe MANHA/TARDE? 
-                // Or, considering the user specifically mentioned "Integral Pending", 
-                // I'll subtract from INTEGRAL key first.
-
-                const turnosParaChecar = ['INTEGRAL', 'MANHA', 'TARDE'];
-
-                let qtdParaSubtrair = quantidade;
-
                 if (serie) {
-                    for (const turno of turnosParaChecar) {
-                        if (qtdParaSubtrair <= 0) break;
-
-                        const key = `${escola}|${serie}|${turno}`;
+                    // 1. Subtract Integral Pending from INTEGRAL Shift
+                    const integralQtd = porOrigem.INTEGRAL || 0;
+                    if (integralQtd > 0) {
+                        const key = `${escola}|${serie}|INTEGRAL`;
                         if (mapaVagas[key] && mapaVagas[key] > 0) {
                             const disponivel = mapaVagas[key];
-                            const deduzir = Math.min(disponivel, qtdParaSubtrair);
-
+                            const deduzir = Math.min(disponivel, integralQtd);
                             mapaVagas[key] -= deduzir;
-                            qtdParaSubtrair -= deduzir;
+                            console.log(`[Pending Ded. INTEGRAL] ${escola} | Age ${idade} -> Subtracted ${deduzir}.`);
+                        }
+                    }
 
-                            console.log(`[Pending Ded.] ${escola} | Age ${idade} | ${turno} -> Subtracted ${deduzir}. Remaining pending: ${qtdParaSubtrair}`);
+                    // 2. Subtract Standard Pending from Partial Shifts (Manha -> Tarde)
+                    let padraoQtd = porOrigem.PADRAO || 0;
+                    if (padraoQtd > 0) {
+                        const partialShifts = ['MANHA', 'TARDE'];
+                        for (const turno of partialShifts) {
+                            if (padraoQtd <= 0) break;
+                            const key = `${escola}|${serie}|${turno}`;
+                            if (mapaVagas[key] && mapaVagas[key] > 0) {
+                                const disponivel = mapaVagas[key];
+                                const deduzir = Math.min(disponivel, padraoQtd);
+                                mapaVagas[key] -= deduzir;
+                                padraoQtd -= deduzir;
+                                console.log(`[Pending Ded. PADRAO] ${escola} | Age ${idade} | ${turno} -> Subtracted ${deduzir}.`);
+                            }
                         }
                     }
                 }
