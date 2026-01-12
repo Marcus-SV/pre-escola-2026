@@ -159,18 +159,15 @@ export class PendentesService {
             const header = data[0];
             const rows = data.slice(1);
 
-            // Find columns dynamically
-            const prazoCol = this.sheetsService.findColumnIndex(header, ['PRAZO'], -1, false);
-            const escolaDestinoCol = this.sheetsService.findColumnIndex(header, ['ESCOLA DESTINO'], -1, false);
-            const idadeCol = this.sheetsService.findColumnIndex(header, ['IDADE'], -1, false);
+            // Find columns dynamically - Updated based on Debug
+            const prazoCol = this.sheetsService.findColumnIndex(header, ['Carimbo de data/hora', 'Timestamp'], 0, false);
+            const escolaDestinoCol = this.sheetsService.findColumnIndex(header, ['Selecione a Unidade Escolar de Interesse', 'Escola de Interesse'], 21, false);
+            const idadeCol = this.sheetsService.findColumnIndex(header, ['IDADE'], 23, false);
 
-            if (prazoCol === -1 || escolaDestinoCol === -1 || idadeCol === -1) {
-                console.warn('[PendentesService] Colunas não encontradas na planilha integral. Pulando.');
+            if (escolaDestinoCol === undefined || idadeCol === undefined) {
+                console.warn(`[PendentesService] Colunas não encontradas na planilha integral. Escola: ${escolaDestinoCol}, Idade: ${idadeCol}`);
                 return { success: true, pendentes: [] }; // Return empty success to not block
             }
-
-            const hoje = new Date();
-            hoje.setHours(0, 0, 0, 0);
 
             const pendentes: Pendente[] = [];
             const escolasExcecao = [
@@ -182,43 +179,40 @@ export class PendentesService {
             ];
 
             rows.forEach(row => {
-                const prazo = row[prazoCol];
+                const prazo = (prazoCol !== -1 && row[prazoCol]) ? row[prazoCol] : '';
                 const escolaDestino = row[escolaDestinoCol]; // Should be string
                 const idade = row[idadeCol];
 
-                if (!escolaDestino || !escolasExcecao.includes(escolaDestino.trim().toUpperCase())) {
+                if (!escolaDestino) return;
+
+                // Normalize school name for comparison
+                const escolaNorm = escolaDestino.trim().toUpperCase();
+
+                // Compare with exception list
+                const isExcecao = escolasExcecao.some(ex => escolaNorm.includes(ex));
+
+                if (!isExcecao) {
                     return; // Skip if not in exception list
                 }
 
-                if (prazo) {
-                    // Parse date dd/mm/yyyy
-                    const parts = prazo.split('/');
-                    if (parts.length === 3) {
-                        // Careful with header format provided in prompt: dd/mm/yyyy
-                        const dataPrazo = new Date(
-                            parseInt(parts[2]),
-                            parseInt(parts[1]) - 1,
-                            parseInt(parts[0])
-                        );
+                // NOTE: Integral sheet uses 'Timestamp' (Submission Date).
+                // DO NOT Filter by Date >= Today, as these are queue items created in the past.
 
-                        if (dataPrazo >= hoje) {
-                            pendentes.push({
-                                escola_destino: escolaDestino,
-                                idade: idade,
-                                prazo: prazo,
-                                origem: 'INTEGRAL'
-                            });
-                        }
-                    }
+                if (idade) {
+                    pendentes.push({
+                        escola_destino: escolaNorm,
+                        idade: idade.replace(/\D/g, ''), // Ensure numeric string
+                        prazo: prazo,
+                        origem: 'INTEGRAL'
+                    });
                 }
             });
 
+            console.log(`[PendentesService] Integral found: ${pendentes.length}`);
             return { success: true, pendentes };
 
         } catch (error: any) {
             console.error('Erro ao verificar pendentes integral:', error);
-            // Allow failure without breaking main flow? Or report? 
-            // Logic says just log and return empty to avoid total failure
             return { success: false, message: error.message };
         }
     }
