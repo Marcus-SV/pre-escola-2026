@@ -143,20 +143,33 @@ export class MapeamentoService {
             }
         });
 
-        // 2. Group Pendentes by "Escola|Serie"
-        const pendentesPorEscolaSerie: Record<string, number> = {};
+        // 2. Group Pendentes by "Escola|Serie" WITH Origin Split
+        interface PendenteSplit {
+            total: number;
+            padrao: number;
+            integral: number;
+        }
+        const pendentesPorEscolaSerie: Record<string, PendenteSplit> = {};
+
         gruposPendentes.forEach((grupo: any) => {
             const escola = (grupo.escola_destino || '').trim();
             const idade = parseInt(grupo.idade || '0');
-            const qtd = parseInt(grupo.quantidade || '0');
+            // Check if por_origem exists, otherwise fallback (assume PADRAO for safety, though tracking should be active)
+            const porOrigem = grupo.por_origem || { PADRAO: grupo.quantidade, INTEGRAL: 0 };
+            const qtdPadrao = porOrigem.PADRAO || 0;
+            const qtdIntegral = porOrigem.INTEGRAL || 0;
 
             if (!escola || idade <= 0) return;
             const serie = (idade === 4) ? '1' : ((idade === 5) ? '2' : null);
             if (!serie) return;
 
             const key = `${escola}|${serie}`;
-            if (!pendentesPorEscolaSerie[key]) pendentesPorEscolaSerie[key] = 0;
-            pendentesPorEscolaSerie[key] += qtd;
+            if (!pendentesPorEscolaSerie[key]) {
+                pendentesPorEscolaSerie[key] = { total: 0, padrao: 0, integral: 0 };
+            }
+            pendentesPorEscolaSerie[key].total += (qtdPadrao + qtdIntegral);
+            pendentesPorEscolaSerie[key].padrao += qtdPadrao;
+            pendentesPorEscolaSerie[key].integral += qtdIntegral;
         });
 
         const mapeamento: MapeamentoItem[] = [];
@@ -177,50 +190,175 @@ export class MapeamentoService {
         // 3. Process each School/Series Group
         Object.keys(vagasPorEscolaSerie).forEach(key => {
             const shifts = vagasPorEscolaSerie[key];
-            shifts.sort(sortTurnos); // Waterfall Order
+            shifts.sort(sortTurnos); // Waterfall Order (Manha -> Tarde -> Integral)
 
-            let totalPendentes = pendentesPorEscolaSerie[key] || 0;
+            const pendentes = pendentesPorEscolaSerie[key] || { total: 0, padrao: 0, integral: 0 };
 
-            // Distribute pendentes across shifts
-            shifts.forEach((shift, index) => {
-                const isLast = index === shifts.length - 1;
+            // Allocation Strategies
+            shifts.forEach((shift) => {
+                const isIntegralShift = shift.turno.toUpperCase() === 'INTEGRAL';
                 let allocated = 0;
 
-                if (totalPendentes > 0) {
-                    if (isLast) {
-                        // Last shift takes all remaining, even if it causes overload (negative rest)
-                        allocated = totalPendentes;
-                    } else {
-                        // Take up to capacity
-                        allocated = Math.min(totalPendentes, shift.vagas);
-                    }
-                    totalPendentes -= allocated;
+                // Priority Logic
+                if (isIntegralShift) {
+                    // Integral Shift: Takes INTEGRAL Pending
+                    // (Strict matching: Only Integral Pending goes here?)
+                    // Decision: Yes, prioritize Integral. 
+                    // If we strictly prevent Standard from going here, we show accurate deficits.
+
+                    const take = pendentes.integral; // Try to take all remaining integral pending
+                    // In mapping, we often want to show the 'demand' vs 'capacity'.
+                    // If we simply subtract, we get the 'restantes'.
+
+                    // We allocate what we can for 'allocated' stat (bounded by vacancies), 
+                    // BUT for 'vagas_restantes' we subtract the FULL demand to show overflow (negative).
+                    // However, the previous logic calculated allocated then subtracted.
+                    // Previous: vagasRestantes = shift.vagas - allocated;
+                    // If allocated is capped at shift.vagas, vagasRestantes is 0 (Full), not -5 (Overloaded).
+                    // The 'Overload' Logic only happened on the LAST shift previously.
+
+                    // NEW LOGIC: We want to show overflow on ANY shift that is short.
+                    // So: allocated = min(demand, capacity) -> Used for occupancy %
+                    // vagas_restantes = capacity - demand -> Can be negative.
+
+                    const demand = pendentes.integral;
+                    allocated = Math.min(demand, shift.vagas);
+
+                    // Reduce the global pool? 
+                    // For mapping, if we have multiple Integral shifts (?) unlikely.
+                    // But if we do, we should decrement.
+                    pendentes.integral -= allocated;
+                    // Wait, if demand > capacity, we allocated 'capacity'. 
+                    // Remaining demand should ideally flow to next matching shift or stay as overflow.
+                    // If this is the ONLY integral shift, the remaining `pendentes.integral` is the overflow.
+                    // But `vagas_restantes` needs to reflect that overflow HERE.
+
+                } else {
+                    // Partial Shift (Manha/Tarde): Takes PADRAO Pending
+                    const demand = pendentes.padrao;
+                    allocated = Math.min(demand, shift.vagas);
+                    pendentes.padrao -= allocated;
                 }
 
-                const vagasRestantes = shift.vagas - allocated;
+                // Calculate Restantes based on the demand TARGETING this shift
+                // If it's Integral, demand was Initial Integral Pending (approx).
+                // Issue: If we have multiple partial shifts (Manha, Tarde), 'pendentes.padrao' is a shared pool.
+                // We shouldn't show -10 on Manha AND -10 on Tarde if total deficit is 10.
+                // Waterfall is needed for the shared pool phases.
 
-                // Status Logic
-                let status = 'Disponível';
-                if (vagasRestantes < 0) status = 'Sobrecarga';
-                else if (vagasRestantes === 0) status = 'Lotado';
+                // refined Waterfall for Partial:
+                // Shift 1 (Manha): Demand = All Standard Pending. 
+                //    Allocates = min(Demand, Vagas). 
+                //    Leftover Standard Pending flows to Shift 2.
+                //    Restantes = Vagas - Allocates. (Does not show overflow yet).
+                // Shift 2 (Tarde): Demand = Leftover Standard Pending.
+                //    Allocates = min(Demand, Vagas).
+                //    Restantes = Vagas - Demand (Pure subtraction? No, allocates is capped).
 
-                // Occupancy Logic
-                let percentual = 0;
-                if (shift.vagas > 0) {
-                    percentual = parseFloat(((allocated / shift.vagas) * 100).toFixed(1));
-                } else if (allocated > 0) {
-                    percentual = 100; // No spots but allocated -> 100% (or more)
+                // HOW TO SHOW OVERFLOW CORRECTLY?
+                // Usually, overflow is shown on the "Last Resort" shift or clearly marked.
+                // Existing logic: "isLast" check forced dump.
+
+                // Hybrid Plan: 
+                // Integral Shift: Consumes Integral Pending. If it's the only one, show full deficit.
+                // Partial Shifts: Waterfall Standard Pending. If Tarde is last partial, show deficit there?
+
+                // Let's implement 'Visual Deficit':
+                // For Integral: 
+                //    demand = initial integral pending.
+                //    allocated = min(demand, vacancies).
+                //    remaining_in_pool = demand - allocated.
+                //    vagas_restantes = vacancies - demand (if demand > vacancies, this is negative).
+                //    BUT we must ensure we don't count this demand again.
+                //    Since Integral is usually a singleton shift, this works.
+
+                // For Partial (Manha/Tarde):
+                //    demand = current padrao pool.
+                //    allocated = min(demand, vacancies).
+                //    remaining_in_pool = demand - allocated.
+                //    vagas_restantes = vacancies - allocated. (Shows 0 if full).
+                //    PENDING: How to show the overflow if both Manha and Tarde are full?
+                //    We need to force the subtraction on the LAST compatible shift.
+
+                let vagasRestantes = shift.vagas - allocated;
+
+                // Force Overflow Display
+                if (isIntegralShift) {
+                    // If there is still integral pending left after allocation (indep of whether this is 'last' shift),
+                    // and since integral shifts don't usually chain, let's reflect the deficit here.
+                    // Actually, simply: vagasRestantes = shift.vagas - (allocated + remaining_integral_demand_for_this_type)
+                    // If we allocated max, remaining is (demand - allocated).
+                    // So: vagasRestantes = shift.vagas - demand.
+                    // But we must act destructively on the pool so next integral shift doesn't see it (unlikely case but safe).
+
+                    // What if we have unallocated integral pending?
+                    const unallocated = (isIntegralShift) ? (pendentes.integral - (pendentes.integral - allocated)) : 0;
+                    // Wait, `allocated` is what we took. `pendentes.integral` was decremented? NO, I commented 'pendentes.integral -= allocated' above but didn't correct the variable usage in that thought block.
+                    // Let's settle:
+                }
+            });
+
+            // RE-DO SHIFT LOOP properly with Mutable State
+
+            // We need to know which shifts are "Partial" group to find the "Last Partial".
+            const partialShifts = shifts.filter(s => s.turno.toUpperCase() !== 'INTEGRAL');
+            const integralShifts = shifts.filter(s => s.turno.toUpperCase() === 'INTEGRAL');
+
+            // Loop 1: Integrals (usually just one)
+            integralShifts.forEach(shift => {
+                const demand = pendentes.integral;
+                const allocated = Math.min(demand, shift.vagas);
+                pendentes.integral -= allocated; // Consumed
+
+                // If this is the last/only integral shift, allow it to go negative
+                // to show the deficit of integral spots.
+                let effectiveDemand = allocated;
+                if (pendentes.integral > 0) { // Still have checking to do?
+                    // If we are at the last integral shift, we assume the rest of the integral demand targets THIS shift (overflow).
+                    // Since usually there's only 1, this is always true.
+                    effectiveDemand += pendentes.integral;
+                    pendentes.integral = 0; // All accounted for as overflow here
                 }
 
+                // Result
+                shift._allocated = allocated; // Temporary storage
+                shift._restantes = shift.vagas - effectiveDemand;
+                shift._status = (shift._restantes < 0) ? 'Sobrecarga' : (shift._restantes === 0 ? 'Lotado' : 'Disponível');
+                shift._percentual = (shift.vagas > 0) ? ((allocated / shift.vagas) * 100) : (allocated > 0 ? 100 : 0);
+            });
+
+            // Loop 2: Partials (Manha -> Tarde)
+            partialShifts.forEach((shift, idx) => {
+                const demand = pendentes.padrao;
+                const allocated = Math.min(demand, shift.vagas);
+                pendentes.padrao -= allocated;
+
+                const isLastPartial = (idx === partialShifts.length - 1);
+
+                let effectiveDemand = allocated;
+                if (isLastPartial && pendentes.padrao > 0) {
+                    effectiveDemand += pendentes.padrao;
+                    pendentes.padrao = 0;
+                }
+
+                shift._allocated = allocated;
+                shift._restantes = shift.vagas - effectiveDemand;
+                shift._status = (shift._restantes < 0) ? 'Sobrecarga' : (shift._restantes === 0 ? 'Lotado' : 'Disponível');
+                shift._percentual = (shift.vagas > 0) ? ((allocated / shift.vagas) * 100) : (allocated > 0 ? 100 : 0);
+            });
+
+            // Push to result
+            shifts.forEach(shift => {
                 mapeamento.push({
                     escola: shift.escola,
                     serie: shift.serie,
                     turno: shift.turno,
                     vagas_disponiveis: shift.vagas,
-                    inscricoes_pendentes: allocated, // We show allocated here to explain the usage
-                    vagas_restantes: vagasRestantes,
-                    status,
-                    percentual_ocupacao: percentual
+                    inscricoes_pendentes: shift._allocated, // Display ACTUAL filled spots (or effective demand? User usually wants to see current occupancy). 
+                    // Standard allows showing "Allocated". "Restantes" shows the problem.
+                    vagas_restantes: shift._restantes,
+                    status: shift._status,
+                    percentual_ocupacao: parseFloat(shift._percentual.toFixed(1))
                 });
             });
         });
@@ -229,26 +367,30 @@ export class MapeamentoService {
         Object.keys(pendentesPorEscolaSerie).forEach(key => {
             if (!vagasPorEscolaSerie[key]) {
                 const [escola, serie] = key.split('|');
-                const qtd = pendentesPorEscolaSerie[key];
+                const p = pendentesPorEscolaSerie[key];
 
-                mapeamento.push({
-                    escola,
-                    serie,
-                    turno: 'N/D',
-                    vagas_disponiveis: 0,
-                    inscricoes_pendentes: qtd,
-                    vagas_restantes: -qtd,
-                    status: 'Sobrecarga',
-                    percentual_ocupacao: 100
-                });
+                // Create rows for non-existent shifts if demand exists
+                if (p.padrao > 0) {
+                    mapeamento.push({
+                        escola, serie, turno: 'MANHÃ/TARDE', vagas_disponiveis: 0,
+                        inscricoes_pendentes: p.padrao, vagas_restantes: -p.padrao,
+                        status: 'Sobrecarga', percentual_ocupacao: 100
+                    });
+                }
+                if (p.integral > 0) {
+                    mapeamento.push({
+                        escola, serie, turno: 'INTEGRAL', vagas_disponiveis: 0,
+                        inscricoes_pendentes: p.integral, vagas_restantes: -p.integral,
+                        status: 'Sobrecarga', percentual_ocupacao: 100
+                    });
+                }
             }
         });
 
-        // 5. Final Sort
+        // 5. Final Sort (Reuse existing sort logic)
         mapeamento.sort((a, b) => {
             if (a.escola === b.escola) {
                 if (a.serie === b.serie) {
-                    // Reuse sort helper logic for final display order
                     const order: Record<string, number> = {
                         'MANHA': 1, 'MANHÃ': 1,
                         'TARDE': 2,
