@@ -10,6 +10,8 @@ export const metadata: Metadata = {
   description: "Sistema de gerenciamento de pré-escola",
 };
 
+import { Toaster } from "sonner";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -20,6 +22,7 @@ export default function RootLayout({
       <body className={inter.className}>
         <NextAuthProvider>
           {children}
+          <Toaster />
         </NextAuthProvider>
       </body>
     </html>

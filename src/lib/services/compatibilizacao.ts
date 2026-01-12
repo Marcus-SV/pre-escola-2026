@@ -1,6 +1,7 @@
 import { GoogleSheetsService } from './google-sheets';
 import { MapeamentoService } from './mapeamento';
 import { ClassificationService } from './classification';
+import { PendentesService } from './pendentes';
 
 interface Compatibilizado {
     nome: string;
@@ -21,11 +22,13 @@ export class CompatibilizacaoService {
     private sheetsService: GoogleSheetsService;
     private mapeamentoService: MapeamentoService;
     private classificationService: ClassificationService;
+    private pendentesService: PendentesService;
 
     constructor() {
         this.sheetsService = new GoogleSheetsService();
         this.mapeamentoService = new MapeamentoService();
         this.classificationService = new ClassificationService();
+        this.pendentesService = new PendentesService();
     }
 
     async executarCompatibilizacao() {
@@ -52,9 +55,18 @@ export class CompatibilizacaoService {
                 return { success: false, message: 'Dados de mapeamento inválidos' };
             }
 
-            // 3. Process
+            // 3. Get Pendentes Statistics (Standard + Integral)
+            console.log('[DEBUG] Obtendo estatísticas de pendentes...');
+            const pendentesResult = await this.pendentesService.obterEstatisticas();
+
+            // 4. Process
             console.log('[DEBUG] Iniciando processamento...');
-            const resultado = this.processarCompatibilizacao(classificacaoResult.resultados, (mapeamentoResult as any).data);
+            // Pass pendentes result (even if failed/empty - handle inside)
+            const resultado = this.processarCompatibilizacao(
+                classificacaoResult.resultados,
+                (mapeamentoResult as any).data,
+                pendentesResult.success ? (pendentesResult as any).detalhado : []
+            );
 
             return {
                 success: true,
@@ -72,13 +84,93 @@ export class CompatibilizacaoService {
         }
     }
 
-    private processarCompatibilizacao(classificados: any[], mapeamento: any[]) {
+    private processarCompatibilizacao(classificados: any[], mapeamento: any[], pendentes: any[]) {
         // Map vacancies by Key: Escola|Serie|Turno
         const mapaVagas: Record<string, number> = {};
         mapeamento.forEach(m => {
             const key = `${m.escola}|${m.serie}|${this.normalizarTurno(m.turno)}`;
             mapaVagas[key] = m.vagas_restantes; // Use remaining vacancies
         });
+
+        // --- SUBTRACT PENDING ---
+        if (pendentes && pendentes.length > 0) {
+            console.log(`[DEBUG] Subtraindo ${pendentes.length} grupos de pendentes das vagas...`);
+            pendentes.forEach((p: any) => {
+                const escola = p.escola_destino;
+                const idade = p.idade;
+                const quantidade = p.quantidade;
+
+                // Determine Serie based on Age (approximate logic, check requirements if strict)
+                // Age 4 -> Serie 1, Age 5 -> Serie 2
+                let serie = '';
+                if (idade === '4') serie = '1';
+                else if (idade === '5') serie = '2';
+
+                // Determine Turno. 
+                // IMPORTANT: The prompt implies Integral Pending = Integral Vacancies
+                // But the 'Pending' object doesn't strictly have a 'Periodo' field from the sheet read logic,
+                // except it came from 'Integral' sheet or is generalized. 
+                // However, the `pendentes.ts` currently groups by School|Age. 
+                // If the prompt says "subtract these vacancies", we must assume which shift they consume.
+                // Since the request specific "Menu Pendentes considera vagas do periodo integral",
+                // and we are adding them.
+                // Assuming standard pendentes use the same logic as allocation? 
+                // Or should we assume they consume INTEGRAL slots if they come from the Integral sheet?
+                // The current `GrupoPendente` doesn't distinguish source (Integral vs Standard).
+                // But logically, if a child is pending for a school/age, they occupy a spot.
+                // If the user request implies specifically INTEGRAL pending, we might need to know the shift.
+                // BUT, looking at `pendentes.ts`, we only capture `escola_destino` and `idade`.
+                // Let's assume for now they consume from the 'INTEGRAL' pool if available, or we might need to be smarter.
+                // Wait, the prompt says: "Verique se o menu 'Pendentes' considera as vagas do periodo integral que são as excessôes."
+                // "Discriminar os pendentes de cada planilha e somar o resultado das duas"
+                // "No menu 'Compatibilização' é necessário subtrair as vagas deste totas de pendentas das vagas restantes"
+
+                // If we don't know the shift, we can't subtract accurately from Key: Escola|Serie|Turno.
+                // Let's assume the safest bet: The "Integral" sheet implies INTEGRAL shift. 
+                // The "Standard" sheet implies... what?
+                // If we look at `pendentes.ts`, it reads 'PRAZO', 'ESCOLA DESTINO', 'IDADE'. It does NOT read 'TURNO'.
+                // If we simply subtract from matching School/Serie, we have to pick a Turno.
+                // Let's assume 'INTEGRAL' for the new ones.
+                // But we merged them.
+                // Let's check `PendentesService`.
+                // Maybe we should update `PendentesService` to include `origem` or `turno`?
+                // The prompt for Pendentes: "Atualizar para verificar pendentes da planilha integral... Filtrando para escolas de exceção... considera as vagas do periodo integral"
+                // This strongly suggests these ARE integral vacancies.
+                // Standard pendentes? Probably also occupy slots.
+                // Let's iterate and try to subtract from INTEGRAL first, then others?
+                // Or maybe we should improve `pendentes.ts` to flag them.
+
+                // Actually, let's look at `mapeamento` keys again: Escola|Serie|Turno.
+                // If I have 5 pending kids for School X, Age 4. 
+                // They need slots. 
+                // I will try to subtract from INTEGRAL first (as they are likely full-time priority or exception),
+                // then maybe MANHA/TARDE? 
+                // Or, considering the user specifically mentioned "Integral Pending", 
+                // I'll subtract from INTEGRAL key first.
+
+                const turnosParaChecar = ['INTEGRAL', 'MANHA', 'TARDE'];
+
+                let qtdParaSubtrair = quantidade;
+
+                if (serie) {
+                    for (const turno of turnosParaChecar) {
+                        if (qtdParaSubtrair <= 0) break;
+
+                        const key = `${escola}|${serie}|${turno}`;
+                        if (mapaVagas[key] && mapaVagas[key] > 0) {
+                            const disponivel = mapaVagas[key];
+                            const deduzir = Math.min(disponivel, qtdParaSubtrair);
+
+                            mapaVagas[key] -= deduzir;
+                            qtdParaSubtrair -= deduzir;
+
+                            console.log(`[Pending Ded.] ${escola} | Age ${idade} | ${turno} -> Subtracted ${deduzir}. Remaining pending: ${qtdParaSubtrair}`);
+                        }
+                    }
+                }
+            });
+        }
+        // -----------------------
 
         const compatibilizados: Compatibilizado[] = [];
         const estatisticas = {

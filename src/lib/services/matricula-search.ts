@@ -48,7 +48,7 @@ export class MatriculaSearchService {
                         line,
                         ra,
                         escola: '',
-                        municipio: 'Erro na consulta',
+                        municipio: `Erro: ${error.message}`,
                         status: 'ERRO'
                     };
                 }

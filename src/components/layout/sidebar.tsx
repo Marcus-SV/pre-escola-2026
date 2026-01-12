@@ -17,6 +17,7 @@ import {
     Clock,
     DoorOpen,
     Map,
+    UserX,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useState } from 'react';
@@ -71,6 +72,11 @@ const menuItems = [
         title: 'Compatibilização',
         href: '/compatibilizacao',
         icon: Settings,
+    },
+    {
+        title: 'Inscrições Incompatíveis',
+        href: '/incompativel',
+        icon: UserX,
     },
 
 ];

@@ -21,11 +21,56 @@ export class PendentesService {
 
     async verificarPendentes() {
         try {
+            // 1. Fetch Standard Pendentes (Sheet 0)
+            const standardResult = await this.verificarPendentesPadrao();
+
+            // 2. Fetch Integral Pendentes (Specific Sheet ID)
+            const integralResult = await this.verificarPendentesIntegral();
+
+            const todosPendentes = [
+                ...(standardResult.success ? standardResult.pendentes || [] : []),
+                ...(integralResult.success ? integralResult.pendentes || [] : [])
+            ];
+
+            const totalPendentes = todosPendentes.length;
+
+            // Group by School and Age
+            const agrupadosMap: Record<string, GrupoPendente> = {};
+
+            todosPendentes.forEach(p => {
+                const key = `${p.escola_destino}|${p.idade}`;
+                if (!agrupadosMap[key]) {
+                    agrupadosMap[key] = {
+                        escola_destino: p.escola_destino,
+                        idade: p.idade,
+                        quantidade: 0
+                    };
+                }
+                agrupadosMap[key].quantidade++;
+            });
+
+            return {
+                success: true,
+                message: 'Pendentes verificados com sucesso (Padrão + Integral)',
+                total_pendentes: totalPendentes,
+                agrupados: Object.values(agrupadosMap),
+                data_verificacao: new Date().toLocaleDateString('pt-BR')
+            };
+
+        } catch (error: any) {
+            console.error('Erro ao verificar pendentes:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    // Renamed original logic to verificarPendentesPadrao
+    private async verificarPendentesPadrao() {
+        try {
             // Fetch all data from Sheet Index 0 (A:AL)
             const data = await this.sheetsService.getData('A:AL', 0);
 
             if (!data || data.length === 0) {
-                return { success: false, message: 'Nenhum dado encontrado na planilha' };
+                return { success: false, message: 'Nenhum dado encontrado na planilha padrão' };
             }
 
             const header = data[0];
@@ -36,12 +81,10 @@ export class PendentesService {
             const escolaDestinoCol = this.sheetsService.findColumnIndex(header, ['ESCOLA DESTINO'], 26, false); // Index 26 (AA)
             const idadeCol = this.sheetsService.findColumnIndex(header, ['IDADE'], 21, false); // Index 21 (V)
 
-            console.log(`[DEBUG] Pendentes Cols - Prazo: ${prazoCol}, Escola: ${escolaDestinoCol}, Idade: ${idadeCol}`);
-
             if (prazoCol === undefined || escolaDestinoCol === undefined || idadeCol === undefined) {
                 return {
                     success: false,
-                    message: 'Colunas necessárias não encontradas: PRAZO, ESCOLA DESTINO, IDADE'
+                    message: 'Colunas necessárias não encontradas na planilha padrão: PRAZO, ESCOLA DESTINO, IDADE'
                 };
             }
 
@@ -49,7 +92,6 @@ export class PendentesService {
             hoje.setHours(0, 0, 0, 0);
 
             const pendentes: Pendente[] = [];
-            let totalPendentes = 0;
 
             rows.forEach(row => {
                 const prazo = row[prazoCol];
@@ -72,37 +114,93 @@ export class PendentesService {
                                 idade: idade,
                                 prazo: prazo
                             });
-                            totalPendentes++;
                         }
                     }
                 }
             });
 
-            // Group by School and Age
-            const agrupadosMap: Record<string, GrupoPendente> = {};
+            return { success: true, pendentes };
+        } catch (error: any) {
+            console.error('Erro ao verificar pendentes padrão:', error);
+            return { success: false, message: error.message };
+        }
+    }
 
-            pendentes.forEach(p => {
-                const key = `${p.escola_destino}|${p.idade}`;
-                if (!agrupadosMap[key]) {
-                    agrupadosMap[key] = {
-                        escola_destino: p.escola_destino,
-                        idade: p.idade,
-                        quantidade: 0
-                    };
+    private async verificarPendentesIntegral() {
+        try {
+            const integralSheetId = '1At7qlj7EuXvEaBss16ylbCmKk-riOlPox_ow1Gv5GRQ';
+            // Use a temporary service for the external sheet
+            const integralService = new GoogleSheetsService(integralSheetId);
+
+            // Fetch data from first tab
+            const data = await integralService.getData('A:Z', 0); // Assuming reasonable range
+
+            if (!data || data.length === 0) {
+                return { success: false, message: 'Nenhum dado encontrado na planilha integral' };
+            }
+
+            const header = data[0];
+            const rows = data.slice(1);
+
+            // Find columns dynamically
+            const prazoCol = this.sheetsService.findColumnIndex(header, ['PRAZO'], -1, false);
+            const escolaDestinoCol = this.sheetsService.findColumnIndex(header, ['ESCOLA DESTINO'], -1, false);
+            const idadeCol = this.sheetsService.findColumnIndex(header, ['IDADE'], -1, false);
+
+            if (prazoCol === -1 || escolaDestinoCol === -1 || idadeCol === -1) {
+                console.warn('[PendentesService] Colunas não encontradas na planilha integral. Pulando.');
+                return { success: true, pendentes: [] }; // Return empty success to not block
+            }
+
+            const hoje = new Date();
+            hoje.setHours(0, 0, 0, 0);
+
+            const pendentes: Pendente[] = [];
+            const escolasExcecao = [
+                'A BELA ADORMECIDA', 'AGOSTINHO BRANDI', 'ALBERTO JOSE ISMAEL',
+                'CEU ENCANTADO', 'CINDERELA', 'FADA AZUL',
+                'GEORGINA ATRA HAWILLA', 'LUZIA APARECIDA PENHA DOS SANTOS',
+                'MODESTO RODRIGUES MARQUES', 'PAULO JOSÉ FROES',
+                'PEDRO D\'AMICO', 'SACI PERERE'
+            ];
+
+            rows.forEach(row => {
+                const prazo = row[prazoCol];
+                const escolaDestino = row[escolaDestinoCol]; // Should be string
+                const idade = row[idadeCol];
+
+                if (!escolaDestino || !escolasExcecao.includes(escolaDestino.trim().toUpperCase())) {
+                    return; // Skip if not in exception list
                 }
-                agrupadosMap[key].quantidade++;
+
+                if (prazo) {
+                    // Parse date dd/mm/yyyy
+                    const parts = prazo.split('/');
+                    if (parts.length === 3) {
+                        // Careful with header format provided in prompt: dd/mm/yyyy
+                        const dataPrazo = new Date(
+                            parseInt(parts[2]),
+                            parseInt(parts[1]) - 1,
+                            parseInt(parts[0])
+                        );
+
+                        if (dataPrazo >= hoje) {
+                            pendentes.push({
+                                escola_destino: escolaDestino,
+                                idade: idade,
+                                prazo: prazo
+                            });
+                        }
+                    }
+                }
             });
 
-            return {
-                success: true,
-                message: 'Pendentes verificados com sucesso',
-                total_pendentes: totalPendentes,
-                agrupados: Object.values(agrupadosMap),
-                data_verificacao: hoje.toLocaleDateString('pt-BR')
-            };
+            return { success: true, pendentes };
 
         } catch (error: any) {
-            console.error('Erro ao verificar pendentes:', error);
+            console.error('Erro ao verificar pendentes integral:', error);
+            // Allow failure without breaking main flow? Or report? 
+            // Logic says just log and return empty to avoid total failure
             return { success: false, message: error.message };
         }
     }

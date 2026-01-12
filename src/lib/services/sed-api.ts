@@ -151,7 +151,7 @@ export class SedApiService {
                 } else {
                     return {
                         escola: '',
-                        municipio: 'Fora da Escola',
+                        municipio: 'Fora da Escola', /* outMunicipio was returned in original? Step 15 line 51 says 'municipio: 'Fora da Escola''. But wait, Step 15 line 154 says 'municipio: 'Fora da Escola''. Yes. */
                         status: matricula.outDescSitMatricula || 'INATIVO',
                     };
                 }
@@ -166,7 +166,7 @@ export class SedApiService {
             console.error('Error searching matriculas:', error);
             return {
                 escola: '',
-                municipio: 'Erro na consulta',
+                municipio: `Erro: ${(error as Error).message}`,
                 status: 'ERRO',
             };
         }
