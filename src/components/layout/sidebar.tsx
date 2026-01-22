@@ -17,6 +17,7 @@ import {
     Clock,
     DoorOpen,
     Map,
+    MapPin,
     UserX,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -43,6 +44,7 @@ const menuItems = [
         href: '/pesquisar-matriculas',
         icon: Users,
     },
+
     {
         title: 'Inconsistências',
         href: '/inconsistencias',

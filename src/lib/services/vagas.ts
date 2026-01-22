@@ -115,11 +115,16 @@ export class VagasService {
 
         // Generate rows
         dados.forEach(linha => {
-            const row: string[] = [];
+            const row: any[] = [];
             cabecalho.forEach(col => {
                 let val = linha[col];
-                if (val === undefined || val === null) val = '';
-                row.push(String(val));
+                if (val === undefined || val === null) {
+                    val = '';
+                } else if (typeof val !== 'number') {
+                    val = String(val);
+                }
+                // If it is a number, leave it as number
+                row.push(val);
             });
             values.push(row);
         });

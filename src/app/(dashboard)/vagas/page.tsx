@@ -47,6 +47,7 @@ export default function VagasPage() {
             const result = await pesquisarVagas();
             if (result.success) {
                 // Reload stats to get fresh data from sheets
+                alert('Vagas pesquisadas e salvas com sucesso! A planilha foi atualizada.');
                 await loadStats();
             } else {
                 setError((result as any).message || 'Erro ao pesquisar vagas');

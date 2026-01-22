@@ -420,7 +420,7 @@ export class MapeamentoService {
 
             const rows = mapeamento.map(m => [
                 m.escola, m.serie, m.turno, m.vagas_disponiveis,
-                m.inscricoes_pendentes, m.vagas_restantes, m.status, `${m.percentual_ocupacao}%`
+                m.inscricoes_pendentes, m.vagas_restantes, m.status, m.percentual_ocupacao
             ]);
 
             const data = [header, ...rows];
